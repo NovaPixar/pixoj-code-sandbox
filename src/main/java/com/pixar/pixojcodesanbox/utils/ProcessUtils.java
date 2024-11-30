@@ -10,6 +10,7 @@ import java.io.*;
  * 进程工具类
  */
 public class ProcessUtils {
+
     /**
      * 执行进程并获取信息
      *
@@ -19,9 +20,11 @@ public class ProcessUtils {
      */
     public static ExecuteMessage runProcessAndGetMessage(Process runProcess, String opName) {
         ExecuteMessage executeMessage = new ExecuteMessage();
+
         try {
             StopWatch stopWatch = new StopWatch();
             stopWatch.start();
+            // 等待程序执行，获取错误码
             int exitValue = runProcess.waitFor();
             executeMessage.setExitValue(exitValue);
             //正常退出
@@ -33,31 +36,30 @@ public class ProcessUtils {
                 // 逐行读取
                 String compileOutputLine;
                 while ((compileOutputLine = bufferedReader.readLine()) != null) {
-                    compileOutputStringBuilder.append(compileOutputLine);
+                    compileOutputStringBuilder.append(compileOutputLine).append("\n");
                 }
                 executeMessage.setMessage(compileOutputStringBuilder.toString());
-                // 整体输出
-                System.out.println(compileOutputStringBuilder);
             } else {
-                //异常退出
-                System.out.println(opName + "失败，错误码：" + exitValue);
+                // 异常退出
+                System.out.println(opName + "失败，错误码： " + exitValue);
                 // 分批获取程序的正常输出
                 BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(runProcess.getInputStream()));
                 StringBuilder compileOutputStringBuilder = new StringBuilder();
                 // 逐行读取
                 String compileOutputLine;
                 while ((compileOutputLine = bufferedReader.readLine()) != null) {
-                    compileOutputStringBuilder.append(compileOutputLine);
+                    compileOutputStringBuilder.append(compileOutputLine).append("\n");
                 }
                 executeMessage.setMessage(compileOutputStringBuilder.toString());
 
                 // 分批获取控制台的输出
                 BufferedReader errorBufferedReader = new BufferedReader(new InputStreamReader(runProcess.getErrorStream()));
                 StringBuilder errorCompileOutputStringBuilder = new StringBuilder();
+
                 // 逐行读取
                 String errorCompileOutputLine;
                 while ((errorCompileOutputLine = errorBufferedReader.readLine()) != null) {
-                    errorCompileOutputStringBuilder.append(errorCompileOutputLine);
+                    errorCompileOutputStringBuilder.append(errorCompileOutputLine).append("\n");
                 }
                 executeMessage.setErrorMessage(errorCompileOutputStringBuilder.toString());
             }
@@ -81,13 +83,13 @@ public class ProcessUtils {
     // todo 检测输入参数个数是否符合
     public static ExecuteMessage runInteractProcessAndGetMessage(Process runProcess,  String args) {
         ExecuteMessage executeMessage = new ExecuteMessage();
+
         try {
             // 向控制台输入程序
             OutputStream outputStream = runProcess.getOutputStream();
-
             OutputStreamWriter outputStreamWriter = new OutputStreamWriter(outputStream);
-            String[] split = args.split(" ");
-            outputStreamWriter.write(StrUtil.join("\n", (Object) split)+"\n");
+            String[] s = args.split(" ");
+            outputStreamWriter.write(StrUtil.join("\n", s) + "\n");
             // 将输入上传并且清空缓存区
             outputStreamWriter.flush();
 
@@ -109,8 +111,6 @@ public class ProcessUtils {
         } catch (Exception e) {
             e.printStackTrace();
         }
-
         return executeMessage;
     }
-
 }
