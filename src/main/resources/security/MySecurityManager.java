@@ -1,5 +1,3 @@
-package com.pixar.pixojcodesanbox.security;
-
 import java.security.Permission;
 
 /**
