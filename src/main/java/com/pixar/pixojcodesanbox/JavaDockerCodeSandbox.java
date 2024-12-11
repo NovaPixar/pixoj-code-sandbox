@@ -6,10 +6,8 @@ import cn.hutool.core.util.ArrayUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.dfa.WordTree;
 import com.github.dockerjava.api.DockerClient;
-import com.github.dockerjava.api.command.CreateContainerCmd;
-import com.github.dockerjava.api.command.CreateContainerResponse;
-import com.github.dockerjava.api.command.ExecCreateCmdResponse;
-import com.github.dockerjava.api.command.PullImageCmd;
+import com.github.dockerjava.api.async.ResultCallback;
+import com.github.dockerjava.api.command.*;
 import com.github.dockerjava.api.model.*;
 import com.github.dockerjava.core.DockerClientBuilder;
 import com.github.dockerjava.core.command.ExecStartResultCallback;
@@ -19,13 +17,17 @@ import com.pixar.pixojcodesanbox.model.ExecuteCodeResponse;
 import com.pixar.pixojcodesanbox.model.ExecuteMessage;
 import com.pixar.pixojcodesanbox.model.JudgeInfo;
 import com.pixar.pixojcodesanbox.utils.ProcessUtils;
+import org.springframework.util.StopWatch;
 
+import java.io.Closeable;
 import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 public class JavaDockerCodeSandbox implements CodeSandbox {
 
@@ -121,8 +123,12 @@ public class JavaDockerCodeSandbox implements CodeSandbox {
         HostConfig hostConfig = new HostConfig();
         hostConfig.withMemory(100 * 1000 * 1000L);
         hostConfig.withCpuCount(1L);
+        // todo 拓展 linux安全管理
+        hostConfig.withSecurityOpts(Arrays.asList("seccomp = 安全管理字符串"));
         hostConfig.setBinds(new Bind(userCodeParentPath,new Volume("/app")));
         CreateContainerResponse createContainerResponse = containerCmd
+                .withNetworkDisabled(true)
+                .withReadonlyRootfs(true)
                 .withHostConfig(hostConfig)
                 .withAttachStderr(true)
                 .withAttachStdin(true)
@@ -135,7 +141,10 @@ public class JavaDockerCodeSandbox implements CodeSandbox {
         // 启动容器
         dockerClint.startContainerCmd(containerId).exec();
         // docker exec confident_brattain java -cp /app Main 1 3
+        //执行命令并获取结果
+        List<ExecuteMessage> executeMessageList = new ArrayList<>();
         for (String inputArgs : inputList) {
+            StopWatch stopWatch = new StopWatch();
             String[] inputArgsArray = inputArgs.split(" ");
             String[] cmdArray = ArrayUtil.append(new String[] {"java","-cp","/app","Main"},inputArgsArray);
                    ExecCreateCmdResponse execCreateCmdResponse = dockerClint.execCreateCmd(containerId)
@@ -146,30 +155,138 @@ public class JavaDockerCodeSandbox implements CodeSandbox {
                            .exec();
 
            System.out.println("创建执行命令：" + execCreateCmdResponse);
-            String execId = execCreateCmdResponse.getId();
-            ExecStartResultCallback execStartResultCallback = new ExecStartResultCallback(){
-                @Override
+
+
+            ExecuteMessage executeMessage = new ExecuteMessage();
+            final String[] message = {null};
+            final String[] errorMessage = {null};
+            long time = 0L;
+            // 判断是否超时
+            final boolean[] timeout = {true};
+           String execId = execCreateCmdResponse.getId();
+           ExecStartResultCallback execStartResultCallback = new ExecStartResultCallback(){
+               @Override
+               public void onComplete() {
+                   // 如果执行完成则表示没有超时
+                   timeout[0] = false;
+                   super.onComplete();
+               }
+
+               @Override
                 public void onNext(Frame frame) {
                     StreamType streamType = frame.getStreamType();
                     if(StreamType.STDERR.equals(streamType)){
-                        System.out.println("输出错误结果：" + new String(frame.getPayload()));
+                        errorMessage[0] = new String(frame.getPayload());
+                        System.out.println("输出错误结果：" + errorMessage[0]);
                     } else{
-                        System.out.println("输出结果：" + new String(frame.getPayload()));
+                        message[0] = new String(frame.getPayload());
+                        System.out.println("输出结果：" + message[0]);
                     }
                     super.onNext(frame);
                 }
-            };
-            //todo 判断这个ID是否为空
+           };
+           //todo 判断这个ID是否为空
+
+            final long[] maxMemory = {0L};
+
+            // 获取占用的内存
+            StatsCmd statsCmd = dockerClint.statsCmd(containerId);
+            ResultCallback<Statistics> statisticsResultCallback = statsCmd.exec(new ResultCallback<Statistics>() {
+
+                @Override
+                public void onNext(Statistics statistics) {
+                    System.out.println("内存占用：" + statistics.getMemoryStats().getUsage());
+                    maxMemory[0] = Math.max(statistics.getMemoryStats().getUsage(), maxMemory[0]);
+
+                }
+
+                @Override
+                public void close() throws IOException {
+
+                }
+
+                @Override
+                public void onStart(Closeable closeable) {
+
+                }
+
+                @Override
+                public void onError(Throwable throwable) {
+
+                }
+
+                @Override
+                public void onComplete() {
+
+                }
+            });
+            statsCmd.exec(statisticsResultCallback);
+
+
             try {
+                stopWatch.start();
                 dockerClint.execStartCmd(execId)
                         .exec(execStartResultCallback)
-                        .awaitCompletion();
+                        .awaitCompletion(TIME_OUT, TimeUnit.MICROSECONDS);
+                stopWatch.stop();
+                time = stopWatch.getLastTaskTimeMillis();
+                // 别让程序执行太快，否则捕获不到内存稳定性
+                Thread.sleep(1000L);
+                statsCmd.close();
             } catch (InterruptedException e) {
                 System.out.println("程序执行异常");
                 throw new RuntimeException(e);
             }
+            executeMessage.setMessage(message[0]);
+            executeMessage.setErrorMessage(errorMessage[0]);
+            executeMessage.setTime(time);
+            executeMessage.setMemory(maxMemory[0]);
+            executeMessageList.add(executeMessage);
         }
+
+        // 4. 收集整理输出结果
         ExecuteCodeResponse executeCodeResponse = new ExecuteCodeResponse();
+        List<String> outputList = new ArrayList<>();
+        // 默认用例使用的最长时间，便于讨论是否超时
+        long maxTime = 0L;
+        long maxMemory = 0L;
+        for (ExecuteMessage executeMessage : executeMessageList) {
+            String errorMessage = executeMessage.getErrorMessage();
+            if (StrUtil.isNotBlank(errorMessage)) {
+                executeCodeResponse.setMessage(errorMessage);
+                // 用户提交的代码执行中存在错误
+                executeCodeResponse.setStatus(3);
+                // todo 定义状态枚举值
+                break;
+            }
+            outputList.add(executeMessage.getMessage());
+            Long time = executeMessage.getTime();
+            if (time != null) {
+                maxTime = Math.max(maxTime, time);
+            }
+            Long memory = executeMessage.getMemory();
+            if(memory != null){
+                maxMemory = Math.max(maxMemory,memory);
+            }
+        }
+        executeCodeResponse.setOutputList(outputList);
+        //  正常运行完成，没有错误的话 将状态值设置为 1
+        if (outputList.size() == executeMessageList.size()) {
+            executeCodeResponse.setStatus(1);
+        }
+        executeCodeResponse.setOutputList(outputList);
+        JudgeInfo judgeInfo = new JudgeInfo();
+        // todo 可以设置每个测试用例都有一个独立时间和内存
+        judgeInfo.setTime(maxTime);
+
+         judgeInfo.setMemory(maxMemory);
+
+        executeCodeResponse.setJudgeInfo(judgeInfo);
+        // 5.文件清理
+        if (userCodeFile.getParentFile() != null) {
+            boolean del = FileUtil.del(userCodeParentPath);
+            System.out.println("删除" + (del ? "成功" : "失败"));
+        }
         return executeCodeResponse;
     }
 
