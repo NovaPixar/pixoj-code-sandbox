@@ -2,17 +2,17 @@ package com.pixar.pixojcodesanbox;
 
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.io.resource.ResourceUtil;
+import cn.hutool.core.util.ArrayUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.dfa.WordTree;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.CreateContainerCmd;
 import com.github.dockerjava.api.command.CreateContainerResponse;
+import com.github.dockerjava.api.command.ExecCreateCmdResponse;
 import com.github.dockerjava.api.command.PullImageCmd;
-import com.github.dockerjava.api.model.Bind;
-import com.github.dockerjava.api.model.HostConfig;
-import com.github.dockerjava.api.model.PullResponseItem;
-import com.github.dockerjava.api.model.Volume;
+import com.github.dockerjava.api.model.*;
 import com.github.dockerjava.core.DockerClientBuilder;
+import com.github.dockerjava.core.command.ExecStartResultCallback;
 import com.github.dockerjava.core.command.PullImageResultCallback;
 import com.pixar.pixojcodesanbox.model.ExecuteCodeRequest;
 import com.pixar.pixojcodesanbox.model.ExecuteCodeResponse;
@@ -46,8 +46,8 @@ public class JavaDockerCodeSandbox implements CodeSandbox {
         JavaDockerCodeSandbox javaNativeCodeSandbox = new JavaDockerCodeSandbox();
         ExecuteCodeRequest executeCodeRequest = new ExecuteCodeRequest();
         executeCodeRequest.setInputList(Arrays.asList("1 2", "1 3"));
-//        String code = ResourceUtil.readStr("testCode/simpleComputeArgs/Main.java", StandardCharsets.UTF_8);
-        String code = ResourceUtil.readStr("testCode/unsafeCode/RunFileError.java", StandardCharsets.UTF_8);
+        String code = ResourceUtil.readStr("testCode/simpleComputeArgs/Main.java", StandardCharsets.UTF_8);
+        // String code = ResourceUtil.readStr("testCode/unsafeCode/RunFileError.java", StandardCharsets.UTF_8);
 //        String code = ResourceUtil.readStr("testCode/simpleCompute/Main.java", StandardCharsets.UTF_8);
         executeCodeRequest.setCode(code);
         executeCodeRequest.setLanguage("java");
@@ -115,7 +115,6 @@ public class JavaDockerCodeSandbox implements CodeSandbox {
         }
 
         // 创建容器
-
         CreateContainerCmd containerCmd = dockerClint.createContainerCmd(image);
 
         //创建Linux内的文件到Docker中的映射
@@ -129,11 +128,47 @@ public class JavaDockerCodeSandbox implements CodeSandbox {
                 .withAttachStdin(true)
                 .withAttachStdout(true)
                 .withTty(true)
-                .withCmd("echo","Hello Docker")
                 .exec();
         System.out.println(createContainerResponse);
         String containerId = createContainerResponse.getId();
 
+        // 启动容器
+        dockerClint.startContainerCmd(containerId).exec();
+        // docker exec confident_brattain java -cp /app Main 1 3
+        for (String inputArgs : inputList) {
+            String[] inputArgsArray = inputArgs.split(" ");
+            String[] cmdArray = ArrayUtil.append(new String[] {"java","-cp","/app","Main"},inputArgsArray);
+                   ExecCreateCmdResponse execCreateCmdResponse = dockerClint.execCreateCmd(containerId)
+                           .withCmd(cmdArray)
+                           .withAttachStderr(true)
+                           .withAttachStdin(true)
+                           .withAttachStdout(true)
+                           .exec();
+
+           System.out.println("创建执行命令：" + execCreateCmdResponse);
+            String execId = execCreateCmdResponse.getId();
+            ExecStartResultCallback execStartResultCallback = new ExecStartResultCallback(){
+                @Override
+                public void onNext(Frame frame) {
+                    StreamType streamType = frame.getStreamType();
+                    if(StreamType.STDERR.equals(streamType)){
+                        System.out.println("输出错误结果：" + new String(frame.getPayload()));
+                    } else{
+                        System.out.println("输出结果：" + new String(frame.getPayload()));
+                    }
+                    super.onNext(frame);
+                }
+            };
+            //todo 判断这个ID是否为空
+            try {
+                dockerClint.execStartCmd(execId)
+                        .exec(execStartResultCallback)
+                        .awaitCompletion();
+            } catch (InterruptedException e) {
+                System.out.println("程序执行异常");
+                throw new RuntimeException(e);
+            }
+        }
         ExecuteCodeResponse executeCodeResponse = new ExecuteCodeResponse();
         return executeCodeResponse;
     }
