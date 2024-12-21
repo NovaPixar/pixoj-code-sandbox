@@ -12,6 +12,7 @@ import com.github.dockerjava.core.command.PullImageResultCallback;
 import com.pixar.pixojcodesanbox.model.ExecuteCodeRequest;
 import com.pixar.pixojcodesanbox.model.ExecuteCodeResponse;
 import com.pixar.pixojcodesanbox.model.ExecuteMessage;
+import org.springframework.stereotype.Component;
 import org.springframework.util.StopWatch;
 
 import java.io.Closeable;
@@ -26,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * Java代码模板沙箱的实现
  */
+@Component
 public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate {
 
     private static final long TIME_OUT = 5000L;

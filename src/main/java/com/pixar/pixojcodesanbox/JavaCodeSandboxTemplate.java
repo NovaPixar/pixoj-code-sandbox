@@ -38,7 +38,7 @@ public abstract class JavaCodeSandboxTemplate implements CodeSandbox {
 
         // 2. 编译代码，得到Class文件
         ExecuteMessage compileFileExecuteMessage = compileFile(userCodeFile);
-        System.out.println(compileFileExecuteMessage);
+        // System.out.println(compileFileExecuteMessage);
 
         // 3. 执行代码，得到输出结果
         List<ExecuteMessage> executeMessageList = runCode(userCodeFile, inputList);
@@ -107,9 +107,7 @@ public abstract class JavaCodeSandboxTemplate implements CodeSandbox {
      * @return
      */
     public List<ExecuteMessage> runCode(File userCodeFile,List<String> inputList){
-        String userDir = System.getProperty("user.dir");
-        String globalCodePathName = userDir + File.separator + GLOBAL_CODE_DIR_NAME;
-        String userCodeParentPath = globalCodePathName + File.separator + UUID.randomUUID();
+        String userCodeParentPath = userCodeFile.getParentFile().getAbsolutePath();
         List<ExecuteMessage> executeMessageList = new ArrayList<>();
         for (String inputArgs : inputList) {
 //            String runCmd = String.format("java -Xmx256m -Dfile.encoding=UTF-8 -cp %s Main %s", userCodeParentPath, inputArgs);
